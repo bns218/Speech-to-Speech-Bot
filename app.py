@@ -6,7 +6,7 @@ import re
 from gtts import gTTS
 
 # Set your Google API key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCBvmXKy8Y_--jD4E4kSvhevlepqa9huZM"
+os.environ["GOOGLE_API_KEY"] = "AIzaSyCBvmXKjD4E4kSvhevlepqa9huZM"
 genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 model = genai.GenerativeModel("gemini-1.5-flash")
 
