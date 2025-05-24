@@ -1,7 +1,0 @@
-streamlit
-SpeechRecognition 
-google-generativeai
-re
-gtts
-
-
