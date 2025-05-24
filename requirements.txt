@@ -1,0 +1,7 @@
+streamlit
+SpeechRecognition
+gtts
+sounddevice
+soundfile
+ollama
+playsound==1.2.2

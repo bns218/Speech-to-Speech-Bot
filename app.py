@@ -1,95 +1,138 @@
-import streamlit as st
-import speech_recognition as sr
-import google.generativeai as genai
 import os
-import re
+import streamlit as st
+import tempfile
+import ollama
 from gtts import gTTS
+import speech_recognition as sr
+import io
+import sounddevice as sd
+import soundfile as sf
+from playsound import playsound
+import time
 
-# Set your Google API key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCBvmXKjD4E4kSvhevlepqa9huZM"
-genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-model = genai.GenerativeModel("gemini-1.5-flash")
 
-# Initialize session state to keep track of the conversation and user data
-if 'generated_responses' not in st.session_state:
-    st.session_state['generated_responses'] = []
+# Initialize speech recognizer
+recognizer = sr.Recognizer()
 
-# Function to perform speech to text
-def speech_to_text():
-    recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
-        st.write("Adjusting for ambient noise... Please wait.")
-        recognizer.adjust_for_ambient_noise(source, duration=1)
-        st.write("Listening...")
+# Streamlit UI
+st.title("🎙️ Speech-to-Speech with LLM & Text Display")
+st.info("Click to record, process with Ollama, and hear the response.")
 
-        audio = recognizer.listen(source)
+# Record audio
+def record_audio(filename, duration=5, fs=16000):
+    st.write("Recording... Speak now!")
+    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+    sd.wait()
+    sf.write(filename, recording, fs)
+    return filename
 
+# Convert Speech to Text
+def speech_to_text(audio_file_path):
+    with sr.AudioFile(audio_file_path) as source:
+        audio = recognizer.record(source)
         try:
-            st.write("Recognizing...")
-            text = recognizer.recognize_google(audio)
-            return text
-
+            transcript = recognizer.recognize_google(audio)  # Uses Google's free API
+            return transcript
         except sr.UnknownValueError:
-            return "Sorry, I could not understand the audio."
-        except sr.RequestError as e:
-            return f"Could not request results from Google Speech Recognition service; {e}"
+            raise Exception("Speech could not be understood")
+        except sr.RequestError:
+            raise Exception("Could not request results from speech recognition service")
 
-# Function to clean and sanitize the text
-def clean_text(text):
-    cleaned = re.sub(r'[^\w\s]', '', text)  # Remove punctuation
-    cleaned = re.sub(r'\d+', '', cleaned)  # Remove digits
-    return cleaned.strip()
 
-# Function to convert text to speech using gTTS and save as an audio file
-def text_to_speech(text, language='en'):
-    tts = gTTS(text=text, lang=language, slow=False)
-    audio_file = "output.mp3"  # Use a timestamped filename
-    tts.save(audio_file)
-    return audio_file
-
-# Function to generate response from LLM
-def generate_llm_response(text):
+# Process with Ollama
+def process_with_llm(prompt):
+    if not prompt or len(prompt.strip()) == 0:
+        raise ValueError("Empty prompt received")
+    
     try:
-        response = model.generate_content(text)
-        return response.text
+        # Using a more standard model name
+        model = ollama.chat(
+            model='llama3.2',  # Using the installed Gemma model
+            messages=[
+                {'role': 'user', 'content': prompt}
+            ]
+        )
+        
+        if not model or 'message' not in model or 'content' not in model['message']:
+            raise ValueError("Invalid response format from Ollama")
+        
+        response = model['message']['content']
+        if not response:
+            return "I apologize, but I couldn't generate a response. Please try again."
+        return response
     except Exception as e:
-        return f"Error generating content: {str(e)}"
+        print(f"Error in process_with_llm: {str(e)}")
+        return "I apologize, but there was an error processing your request. Please ensure Ollama is running and try again."
 
-# Streamlit application layout with sidebar for user selections
-st.title("Speech-to-Speech LLM Bot")
-st.sidebar.title("Settings")
-language = st.sidebar.selectbox('Select Language for TTS', ['en', 'es', 'fr', 'de'])
+# Convert Text to Speech
+def text_to_speech(text, filename="output.mp3"):
+    try:
+        # Process the entire text for speech first
+        temp_dir = tempfile.gettempdir()
+        full_audio = os.path.join(temp_dir, f"full_{filename}")
+        tts = gTTS(text, lang='en', slow=False)  # Set slow=False for faster speech
+        tts.save(full_audio)
+        
+        # Display words one by one quickly
+        words = text.split()
+        display_text = st.empty()
+        current_text = ""
+        
+        # Play the full audio in background
+        import threading
+        audio_thread = threading.Thread(target=lambda: playsound(full_audio))
+        audio_thread.start()
+        
+        # Display words rapidly
+        for word in words:
+            current_text += word + " "
+            display_text.markdown(f"### {current_text}")
+            time.sleep(0.4)  # Quick delay for word display
+            
+        # Wait for audio to finish
+        audio_thread.join()
+        
+        # Clean up the temporary file
+        try:
+            os.remove(full_audio)
+        except:
+            pass
+            
+    except Exception as e:
+        st.error(f"Error playing audio: {str(e)}")
+        print(f"Error in text_to_speech: {str(e)}")
+            
+    except Exception as e:
+        st.error(f"Error playing audio: {str(e)}")
+        print(f"Error in text_to_speech: {str(e)}")
 
-if st.button("Start Recording"):
-    with st.spinner('Listening...'):
-        spoken_text = speech_to_text()
-        st.write("You said: ", spoken_text)
+# Streamlit Button to Trigger Workflow
+if st.button("🎤 Record and Process"):
+    with st.spinner("Listening..."):
+        audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+        record_audio(audio_path)
 
-    if spoken_text and "Sorry" not in spoken_text:
-        with st.spinner('Generating response...'):
-            generated_text = generate_llm_response(spoken_text)
-            st.write("Bot says: ", generated_text)
+    with st.spinner("Transcribing..."):
+        try:
+            transcribed_text = speech_to_text(audio_path)
+            st.success(f"You said: {transcribed_text}")
+        except Exception as e:
+            st.error("Speech recognition failed.")
+            st.stop()    
+    with st.spinner("Processing with Ollama..."):
+        try:
+            response_text = process_with_llm(transcribed_text)
+            st.write("💬 Ollama Response:")
+        except Exception as e:
+            st.error("Ollama failed to generate a response.")
+            st.stop()
 
-            # Clean and convert the generated text to speech
-            cleaned_text = clean_text(generated_text)
-            audio_file = text_to_speech(cleaned_text)
+    with st.spinner("Speaking the response..."):
+        text_to_speech(response_text)
+        st.success("Done! ✅")
 
-        # Save the response in session state for future reference or logging
-        st.session_state['generated_responses'].append({
-            'input': spoken_text,
-            'output': generated_text,
-        })
-
-audio_file = 'output.mp3'
-# Enable audio playback
-if st.button("Play Generated Audio"):
-    audio_file_obj = open(audio_file, 'rb')
-    audio_bytes = audio_file_obj.read()
-    st.audio(audio_bytes, format='audio/mp3')
-
-# Display the conversation history
-if st.sidebar.checkbox('Show Conversation History'):
-    st.sidebar.write("Conversation History:")
-    for i, conv in enumerate(st.session_state['generated_responses']):
-        st.sidebar.write(f"{i+1}. You: {conv['input']}")
-        st.sidebar.write(f"   Bot: {conv['output']}")
+    # Clean up the audio file
+    try:
+        os.remove(audio_path)
+    except:
+        pass
